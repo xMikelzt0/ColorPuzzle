@@ -10,6 +10,10 @@ public class PlayTile : MonoBehaviour
     public Material highlightMaterial;
     private Material originalMaterial;
 
+    // Grid coordinates for fast lookup
+    public int gridX;
+    public int gridZ;
+
     // --- Piece Slot System ---
     public static readonly Vector3[] SlotLocalPositions = new Vector3[4]
     {
@@ -62,6 +66,15 @@ public class PlayTile : MonoBehaviour
     {
         for (int i = 0; i < 4; i++)
             slotOccupants[i] = null;
+    }
+
+    // For interactive testing
+    public static PlayTile lastClickedTile;
+
+    void OnMouseDown()
+    {
+        lastClickedTile = this;
+        Debug.Log($"Selected tile: ({gridX}, {gridZ})");
     }
 
     void Awake()

@@ -8,19 +8,61 @@ public class PieceFlyer : MonoBehaviour
         if (group == null || playTile == null) return;
         PieceFlyer flyer = playTile.gameObject.AddComponent<PieceFlyer>();
         Transform[] pieces = new Transform[group.transform.childCount];
-        Vector3[] flyDirections = new Vector3[pieces.Length];
         PlayTile[] destinations = new PlayTile[pieces.Length];
-        float tileSpacing = 0.8f; // Should match your grid spacing
-        int maxSteps = 10; // Should be at least as large as your grid size
         for (int i = 0; i < pieces.Length; i++)
         {
             pieces[i] = group.transform.GetChild(i);
-            flyDirections[i] = -pieces[i].right;
-            // Find the furthest available tile in this direction
-            destinations[i] = GroundGridGenerator.Instance.FindFurthestAvailableTile(
-                playTile.transform.position, flyDirections[i], tileSpacing, maxSteps);
+            var tracker = pieces[i].GetComponent<PieceSlotTracker>();
+            int slotIndex = tracker != null ? tracker.slotIndex : 0;
+            // Use the piece's facing direction with a -90 degree Y offset
+            Vector3 flyDir = Quaternion.Euler(0, -90, 0) * pieces[i].transform.forward;
+            Vector2Int gridDir = new Vector2Int(
+                Mathf.RoundToInt(flyDir.x),
+                Mathf.RoundToInt(flyDir.z)
+            );
+            destinations[i] = GroundGridGenerator.Instance.FindLandingTile(playTile, gridDir, slotIndex);
         }
         flyer.StartCoroutine(flyer.FlyPiecesToTiles(pieces, playTile, destinations, duration, group));
+    }
+
+    public static void SimpleFillGroupToTiles(GameObject group, PlayTile playTile)
+    {
+        if (group == null || playTile == null) return;
+        Transform[] pieces = new Transform[group.transform.childCount];
+        for (int i = 0; i < pieces.Length; i++)
+        {
+            pieces[i] = group.transform.GetChild(i);
+            var tracker = pieces[i].GetComponent<PieceSlotTracker>();
+            int slotIndex = tracker != null ? tracker.slotIndex : 0;
+            // Determine direction from slotIndex
+            Vector2Int direction = Vector2Int.zero;
+            if (slotIndex == 0) direction = new Vector2Int(0, 1);      // Up
+            else if (slotIndex == 1) direction = new Vector2Int(1, 0); // Right
+            else if (slotIndex == 2) direction = new Vector2Int(0, -1);// Down
+            else if (slotIndex == 3) direction = new Vector2Int(-1, 0);// Left
+            // Find landing tile
+            PlayTile landingTile = GroundGridGenerator.Instance.FindLandingTile(playTile, direction, slotIndex);
+            if (landingTile != null)
+            {
+                pieces[i].SetParent(landingTile.transform);
+                pieces[i].localPosition = Vector3.zero;
+                pieces[i].localRotation = Quaternion.Euler(0, slotIndex * 90, 0);
+                if (tracker == null) tracker = pieces[i].gameObject.AddComponent<PieceSlotTracker>();
+                tracker.slotIndex = slotIndex;
+                landingTile.SetSlotOccupant(slotIndex, pieces[i]);
+            }
+            else
+            {
+                // Stay on original tile
+                pieces[i].SetParent(playTile.transform);
+                pieces[i].localPosition = Vector3.zero;
+                pieces[i].localRotation = Quaternion.Euler(0, slotIndex * 90, 0);
+                if (tracker == null) tracker = pieces[i].gameObject.AddComponent<PieceSlotTracker>();
+                tracker.slotIndex = slotIndex;
+                playTile.SetSlotOccupant(slotIndex, pieces[i]);
+            }
+        }
+        Destroy(group);
     }
 
     private IEnumerator FlyPiecesToTiles(Transform[] pieces, PlayTile startTile, PlayTile[] destinations, float duration, GameObject group)
@@ -93,12 +135,11 @@ public class PieceFlyer : MonoBehaviour
                     Transform pushedPiece = destTile.GetSlotOccupant(slotIndex);
                     int pushFrom = slotIndex;
                     int pushTo = -1;
-                    for (int s = 1; s < 4; s++)
+                    for (int s = 0; s < 4; s++)
                     {
-                        int candidate = (slotIndex + s) % 4;
-                        if (!destTile.IsSlotOccupied(candidate))
+                        if (!destTile.IsSlotOccupied(s))
                         {
-                            pushTo = candidate;
+                            pushTo = s;
                             break;
                         }
                     }
@@ -110,17 +151,34 @@ public class PieceFlyer : MonoBehaviour
                         pushTracker.slotIndex = pushTo;
                         pushedPiece.localPosition = Vector3.zero;
                         pushedPiece.localRotation = Quaternion.Euler(0, pushTo * 90, 0);
-                        // Place the new piece in its intended slot
-                        pieces[i].SetParent(destTile.transform);
-                        if (tracker == null) tracker = pieces[i].gameObject.AddComponent<PieceSlotTracker>();
-                        tracker.slotIndex = slotIndex;
-                        pieces[i].localPosition = Vector3.zero;
-                        pieces[i].localRotation = Quaternion.Euler(0, slotIndex * 90, 0);
-                        destTile.SetSlotOccupant(slotIndex, pieces[i]);
+                        destTile.SetSlotOccupant(pushTo, pushedPiece);
+
+                        // Now check if intended slot is empty
+                        if (!destTile.IsSlotOccupied(slotIndex))
+                        {
+                            pieces[i].SetParent(destTile.transform);
+                            if (tracker == null) tracker = pieces[i].gameObject.AddComponent<PieceSlotTracker>();
+                            tracker.slotIndex = slotIndex;
+                            pieces[i].localPosition = Vector3.zero;
+                            pieces[i].localRotation = Quaternion.Euler(0, slotIndex * 90, 0);
+                            destTile.SetSlotOccupant(slotIndex, pieces[i]);
+                        }
+                        else
+                        {
+                            // Intended slot is still occupied, do not place the new piece
+                            pieces[i].SetParent(startTile.transform);
+                            startTile.isOccupied = true;
+                            anyStayed = true;
+                        }
                     }
                     else
                     {
-                        Debug.Log($"All slots full on tile, cannot push");
+                        // All slots full: do not move or overwrite
+                        Debug.Log($"All slots full on tile ({destTile.gridX}, {destTile.gridZ}), cannot push or place piece.");
+                        // Optionally, animate a failed push or keep the piece at its original position
+                        pieces[i].SetParent(startTile.transform);
+                        startTile.isOccupied = true;
+                        anyStayed = true;
                     }
                 }
                 destTile.isOccupied = true;

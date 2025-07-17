@@ -24,6 +24,7 @@ public class GroundGridGenerator : MonoBehaviour
     public PieceGroupGenerator groupGenerator; // Assign in Inspector
     public List<QueueTile> queueTiles = new List<QueueTile>();
     public Material highlightMaterial; // Assign in Inspector
+    public PlayTile[,] playTiles; // 2D array for fast lookup
 
     public void CenterGridInCamera(Camera cam)
     {
@@ -190,6 +191,8 @@ public class GroundGridGenerator : MonoBehaviour
             return;
         }
 
+        playTiles = new PlayTile[columns, rows]; // Allocate the array
+
         // Calculate center offset
         float offsetX = (columns - 1) * tileSpacing / 2f;
         float offsetZ = (rows - 1) * tileSpacing / 2f;
@@ -213,8 +216,22 @@ public class GroundGridGenerator : MonoBehaviour
                     playTileScript = playTile.AddComponent<PlayTile>();
                 // Assign highlight material
                 playTileScript.highlightMaterial = highlightMaterial;
+
+                // Store in 2D array
+                playTiles[x, z] = playTileScript;
+                // Optionally, store grid coordinates in the tile
+                playTileScript.gridX = x;
+                playTileScript.gridZ = z;
             }
         }
+    }
+
+    // Fast lookup for a play tile by grid coordinates
+    public PlayTile GetPlayTile(int x, int z)
+    {
+        if (x >= 0 && x < columns && z >= 0 && z < rows)
+            return playTiles[x, z];
+        return null;
     }
 
     public PlayTile FindFurthestAvailableTile(Vector3 startPos, Vector3 direction, float tileSpacing, int maxSteps)
@@ -234,5 +251,69 @@ public class GroundGridGenerator : MonoBehaviour
             }
         }
         return lastAvailable;
+    }
+
+    // direction: new Vector2Int(0,1)=up, (1,0)=right, (0,-1)=down, (-1,0)=left
+    public PlayTile FindLandingTile(PlayTile startTile, Vector2Int direction, int slotIndex)
+    {
+        int x = startTile.gridX;
+        int z = startTile.gridZ;
+        PlayTile furthestEmpty = null;
+        int steps = Mathf.Max(columns, rows); // Max possible steps
+        for (int i = 1; i < steps; i++)
+        {
+            int nx = x + direction.x * i;
+            int nz = z + direction.y * i;
+            PlayTile tile = GetPlayTile(nx, nz);
+            if (tile == null) break; // Out of bounds
+            bool hasAnyPiece = false;
+            bool hasFreeSlot = false;
+            for (int s = 0; s < 4; s++)
+            {
+                if (tile.IsSlotOccupied(s)) hasAnyPiece = true;
+                else hasFreeSlot = true;
+            }
+            if (hasFreeSlot && hasAnyPiece)
+            {
+                // Nearest partially filled tile
+                return tile;
+            }
+            if (!hasAnyPiece && hasFreeSlot)
+            {
+                // Remember furthest empty tile
+                furthestEmpty = tile;
+            }
+            // If all slots are full, keep searching
+        }
+        return furthestEmpty;
+    }
+
+    void Update()
+    {
+        Vector2Int direction = Vector2Int.zero;
+        string dirName = "";
+
+        if (Input.GetKeyDown(KeyCode.UpArrow)) { direction = new Vector2Int(0, 1); dirName = "Up"; }
+        if (Input.GetKeyDown(KeyCode.RightArrow)) { direction = new Vector2Int(1, 0); dirName = "Right"; }
+        if (Input.GetKeyDown(KeyCode.DownArrow)) { direction = new Vector2Int(0, -1); dirName = "Down"; }
+        if (Input.GetKeyDown(KeyCode.LeftArrow)) { direction = new Vector2Int(-1, 0); dirName = "Left"; }
+
+        if (direction != Vector2Int.zero)
+        {
+            PlayTile startTile = PlayTile.lastClickedTile;
+            if (startTile == null)
+            {
+                int centerX = columns / 2;
+                int centerZ = rows / 2;
+                startTile = GetPlayTile(centerX, centerZ);
+            }
+            int slotIndex = 0; // You can also make this interactive if needed
+
+            PlayTile result = FindLandingTile(startTile, direction, slotIndex);
+            if (result != null)
+                Debug.Log($"[{dirName}] Landing tile found at ({result.gridX}, {result.gridZ})");
+            else
+                Debug.Log($"[{dirName}] No landing tile found in that direction.");
+        }
     }
 } 
